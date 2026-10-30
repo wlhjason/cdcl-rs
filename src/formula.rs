@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::ops::Index;
 
 pub type VarIndex = usize; // from 0
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Lit {
     // Literal (Boolean variable or its negation)
     pub var_idx: VarIndex,
@@ -68,6 +69,16 @@ impl Clause {
             _ => ClauseStatus::Unresolved,
         }
     }
+}
+
+pub fn resolve(clause: &Clause, pivot_in_clause: &Lit, other: &Clause) -> Clause {
+    let mut left_lits: HashSet<&Lit> = clause.lits.iter().collect();
+    left_lits.remove(pivot_in_clause);
+    let mut right_lits: HashSet<&Lit> = other.lits.iter().collect();
+    right_lits.remove(&pivot_in_clause.negate());
+    let mut lits: Vec<Lit> = left_lits.union(&right_lits).cloned().cloned().collect();
+    lits.sort();
+    Clause { lits }
 }
 
 impl Formula {

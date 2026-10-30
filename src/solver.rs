@@ -1,4 +1,4 @@
-use crate::formula::{Clause, ClauseStatus, Formula, Lit, VarIndex};
+use crate::formula::{Clause, ClauseStatus, Formula, Lit, VarIndex, resolve};
 use std::fmt::{Debug, Formatter};
 
 struct Decision {
@@ -7,7 +7,6 @@ struct Decision {
 
 struct Propagation {
     lit: Lit,
-    #[allow(unused)]
     reason: Clause,
 }
 
@@ -41,19 +40,16 @@ impl Trail {
         }
     }
 
-    fn decisions(&self) -> impl DoubleEndedIterator<Item = &Decision> {
-        self.levels.iter().flat_map(|level| level.decision.iter())
-    }
-
     fn num_decisions_until_var_set(&self, lit: &Lit) -> Option<usize> {
         self.levels
             .iter()
             .position(|level| level.lits().any(|l| l.var_idx == lit.var_idx))
     }
 
-    fn find_last_positive_decision(&self) -> Option<&Decision> {
-        self.decisions()
-            .rfind(|decision| decision.lit.polarity == true)
+    fn propagations(&self) -> impl DoubleEndedIterator<Item = &Propagation> {
+        self.levels
+            .iter()
+            .flat_map(|level| level.propagations.iter())
     }
 
     fn add_decision(&mut self, decision: Decision) {
@@ -88,6 +84,27 @@ impl Trail {
     }
 }
 
+fn derive_learned_clause(conflict_clause: &Clause, trail: &Trail) -> Clause {
+    println!("  Deriving learned clause:");
+    let mut learned_clause = conflict_clause.clone();
+
+    // Resolve until all literals are decisions
+    while let Some(propagation) = trail
+        .propagations()
+        .rev()
+        .filter(|p| learned_clause.lits.contains(&p.lit.negate()))
+        .next()
+    {
+        learned_clause = resolve(&propagation.reason, &propagation.lit, &learned_clause);
+        println!(
+            "    [{:?}] reason: {:?} -> {:?}",
+            propagation.lit, propagation.reason, learned_clause,
+        );
+    }
+
+    learned_clause
+}
+
 pub enum SatResult {
     Sat { assignment: Vec<Option<bool>> },
     Unsat,
@@ -110,28 +127,26 @@ pub fn solve(formula: &Formula) -> SatResult {
                 }
                 ClauseStatus::Conflicting => {
                     println!("  Conflicting clause: {clause:?}");
-                    match trail.find_last_positive_decision() {
-                        Some(positive_decision) => {
-                            // We've learned that var := true doesn't work
-                            // Try var := false next
-                            let num_decisions_until_positive_decision = trail
-                                .num_decisions_until_var_set(&positive_decision.lit)
-                                .unwrap();
-                            let learned_clause = Clause {
-                                lits: trail
-                                    .decisions()
-                                    .take(num_decisions_until_positive_decision + 1)
-                                    .map(|Decision { lit }| lit.negate())
-                                    .collect(),
-                            };
-                            println!("  Learned clause: {learned_clause:?}");
 
-                            trail.backjump(num_decisions_until_positive_decision - 1);
-                            clauses.push(learned_clause);
-                            continue 'main;
-                        }
-                        None => return SatResult::Unsat,
-                    }
+                    let learned_clause = derive_learned_clause(clause, &trail);
+                    println!("  Learned clause: {learned_clause:?}");
+
+                    let mut num_decisions_until_vars_set: Vec<usize> = learned_clause
+                        .lits
+                        .iter()
+                        .map(|lit| trail.num_decisions_until_var_set(lit).unwrap())
+                        .collect();
+                    num_decisions_until_vars_set.sort();
+                    let num_decisions_until_clause_becomes_unit =
+                        match num_decisions_until_vars_set[..] {
+                            [i] if i > 0 => 0,
+                            [.., i, j] if i < j => i,
+                            _ => return SatResult::Unsat,
+                        };
+
+                    trail.backjump(num_decisions_until_clause_becomes_unit);
+                    clauses.push(learned_clause);
+                    continue 'main;
                 }
             }
         }
