@@ -88,13 +88,26 @@ fn derive_learned_clause(conflict_clause: &Clause, trail: &Trail) -> Clause {
     println!("  Deriving learned clause:");
     let mut learned_clause = conflict_clause.clone();
 
-    // Resolve until all literals are decisions
-    while let Some(propagation) = trail
-        .propagations()
-        .rev()
-        .filter(|p| learned_clause.lits.contains(&p.lit.negate()))
-        .next()
-    {
+    // Resolve until the clause has exactly one literal set in the last level
+    // (or the clause becomes empty)
+    loop {
+        let mut num_decisions_until_vars_set: Vec<usize> = learned_clause
+            .lits
+            .iter()
+            .map(|lit| trail.num_decisions_until_var_set(lit).unwrap())
+            .collect();
+        num_decisions_until_vars_set.sort();
+        if !matches!(num_decisions_until_vars_set[..], [.., i, j] if i == j) {
+            break;
+        }
+        // If two literals were set in the same level, at least one must be a propagation
+        // (since each level has at most one decision)
+        let propagation = trail
+            .propagations()
+            .rev()
+            .filter(|p| learned_clause.lits.contains(&p.lit.negate()))
+            .next()
+            .unwrap();
         learned_clause = resolve(&propagation.reason, &propagation.lit, &learned_clause);
         println!(
             "    [{:?}] reason: {:?} -> {:?}",
