@@ -1,54 +1,90 @@
-use crate::formula::{ClauseStatus, Formula, Lit};
+use crate::formula::{Clause, ClauseStatus, Formula, Lit, VarIndex};
 use std::fmt::{Debug, Formatter};
 
 struct Decision {
     lit: Lit,
 }
 
+struct Propagation {
+    lit: Lit,
+    #[allow(unused)]
+    reason: Clause,
+}
+
+struct Level {
+    decision: Option<Decision>,
+    propagations: Vec<Propagation>,
+}
+
+impl Level {
+    fn lits(&self) -> impl Iterator<Item = &Lit> {
+        self.decision
+            .iter()
+            .map(|d| &d.lit)
+            .chain(self.propagations.iter().map(|p| &p.lit))
+    }
+}
+
 struct Trail {
-    decisions: Vec<Decision>,
+    levels: Vec<Level>,
     num_vars: usize,
 }
 
 impl Trail {
     fn new(num_vars: usize) -> Self {
         Self {
+            levels: vec![Level {
+                decision: None,
+                propagations: vec![],
+            }],
             num_vars,
-            decisions: vec![],
         }
     }
 
-    fn num_decisions(&self) -> usize {
-        self.decisions.len()
+    fn decisions(&self) -> impl DoubleEndedIterator<Item = &Decision> {
+        self.levels.iter().flat_map(|level| level.decision.iter())
     }
 
     fn num_decisions_until_var_set(&self, lit: &Lit) -> Option<usize> {
-        self.decisions
+        self.levels
             .iter()
-            .position(|Decision { lit: l }| l.var_idx == lit.var_idx)
-            .map(|i| i + 1)
+            .position(|level| level.lits().any(|l| l.var_idx == lit.var_idx))
     }
 
     fn find_last_positive_decision(&self) -> Option<&Decision> {
-        self.decisions
-            .iter()
+        self.decisions()
             .rfind(|decision| decision.lit.polarity == true)
     }
 
     fn add_decision(&mut self, decision: Decision) {
-        self.decisions.push(decision)
+        self.levels.push(Level {
+            decision: Some(decision),
+            propagations: vec![],
+        })
+    }
+
+    fn add_propagation(&mut self, propagation: Propagation) {
+        self.levels
+            .last_mut()
+            .unwrap()
+            .propagations
+            .push(propagation)
     }
 
     fn backjump(&mut self, num_decisions_to_keep: usize) {
-        self.decisions.truncate(num_decisions_to_keep);
+        self.levels.truncate(1 + num_decisions_to_keep);
     }
 
     fn assignment(&self) -> Vec<Option<bool>> {
         let mut assignment = vec![None; self.num_vars];
-        for Decision { lit } in &self.decisions {
+        for lit in self.levels.iter().flat_map(|level| level.lits()) {
             assignment[lit.var_idx] = Some(lit.polarity)
         }
         assignment
+    }
+
+    fn unassigned_var_idx(&self) -> Option<VarIndex> {
+        self.assignment().iter().position(|a| a.is_none())
     }
 }
 
@@ -64,6 +100,13 @@ pub fn solve(formula: &Formula) -> SatResult {
         for clause in formula.clauses.iter() {
             match clause.check(&trail.assignment()) {
                 ClauseStatus::Satisfied | ClauseStatus::Unresolved => continue,
+                ClauseStatus::Unit(lit) => {
+                    trail.add_propagation(Propagation {
+                        lit,
+                        reason: clause.clone(),
+                    });
+                    continue 'main;
+                }
                 ClauseStatus::Conflicting => {
                     println!("  Conflicting clause: {clause:?}");
                     match trail.find_last_positive_decision() {
@@ -87,11 +130,11 @@ pub fn solve(formula: &Formula) -> SatResult {
             }
         }
 
-        if trail.num_decisions() < formula.num_vars {
+        if let Some(unassigned_var_idx) = trail.unassigned_var_idx() {
             // Decide next var := true
             trail.add_decision(Decision {
                 lit: Lit {
-                    var_idx: trail.num_decisions(),
+                    var_idx: unassigned_var_idx,
                     polarity: true,
                 },
             });
@@ -103,13 +146,25 @@ pub fn solve(formula: &Formula) -> SatResult {
     }
 }
 
-impl Debug for Trail {
+impl Debug for Level {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[ ")?;
-        for Decision { lit } in self.decisions.iter() {
+        if let Some(Decision { lit }) = &self.decision {
+            write!(f, "D={lit:?} ")?;
+        }
+        for Propagation { lit, .. } in self.propagations.iter() {
             write!(f, "{lit:?} ")?;
         }
         write!(f, "]")
+    }
+}
+
+impl Debug for Trail {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for (i, level) in self.levels.iter().enumerate() {
+            write!(f, "L{i}={level:?} ")?;
+        }
+        Ok(())
     }
 }
 

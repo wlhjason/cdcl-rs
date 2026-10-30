@@ -3,12 +3,14 @@ use std::ops::Index;
 
 pub type VarIndex = usize; // from 0
 
+#[derive(Clone)]
 pub struct Lit {
     // Literal (Boolean variable or its negation)
     pub var_idx: VarIndex,
     pub polarity: bool,
 }
 
+#[derive(Clone)]
 pub struct Clause {
     // Disjunction (OR) of literals
     pub lits: Vec<Lit>,
@@ -23,7 +25,8 @@ pub struct Formula {
 pub enum ClauseStatus {
     Satisfied,   // true
     Conflicting, // false
-    Unresolved,  // undetermined
+    Unit(Lit),   // exactly one literal undetermined
+    Unresolved,  // other cases
 }
 
 impl Lit {
@@ -48,15 +51,20 @@ impl Lit {
 impl Clause {
     pub fn check(&self, assignment: &impl Index<VarIndex, Output = Option<bool>>) -> ClauseStatus {
         let mut num_undetermined_lits = 0;
+        let mut last_undetermined_lit: Option<Lit> = None;
         for lit in self.lits.iter() {
             match lit.evaluate(assignment) {
                 Some(true) => return ClauseStatus::Satisfied,
                 Some(false) => {}
-                None => num_undetermined_lits += 1,
+                None => {
+                    num_undetermined_lits += 1;
+                    last_undetermined_lit = Some(lit.clone());
+                }
             }
         }
         match num_undetermined_lits {
             0 => ClauseStatus::Conflicting,
+            1 => ClauseStatus::Unit(last_undetermined_lit.unwrap()),
             _ => ClauseStatus::Unresolved,
         }
     }
