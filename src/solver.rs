@@ -94,10 +94,11 @@ pub enum SatResult {
 }
 
 pub fn solve(formula: &Formula) -> SatResult {
+    let mut clauses = formula.clauses.clone();
     let mut trail = Trail::new(formula.num_vars);
     'main: loop {
         println!(" Trail: {trail:?}");
-        for clause in formula.clauses.iter() {
+        for clause in clauses.iter() {
             match clause.check(&trail.assignment()) {
                 ClauseStatus::Satisfied | ClauseStatus::Unresolved => continue,
                 ClauseStatus::Unit(lit) => {
@@ -116,12 +117,17 @@ pub fn solve(formula: &Formula) -> SatResult {
                             let num_decisions_until_positive_decision = trail
                                 .num_decisions_until_var_set(&positive_decision.lit)
                                 .unwrap();
-                            let flipped_decision = Decision {
-                                lit: positive_decision.lit.negate(),
+                            let learned_clause = Clause {
+                                lits: trail
+                                    .decisions()
+                                    .take(num_decisions_until_positive_decision + 1)
+                                    .map(|Decision { lit }| lit.negate())
+                                    .collect(),
                             };
+                            println!("  Learned clause: {learned_clause:?}");
 
                             trail.backjump(num_decisions_until_positive_decision - 1);
-                            trail.add_decision(flipped_decision);
+                            clauses.push(learned_clause);
                             continue 'main;
                         }
                         None => return SatResult::Unsat,
